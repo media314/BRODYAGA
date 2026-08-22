@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/banner.svg" alt="БРОДЯГА — локальный AI-стек" width="100%">
+  <img src="assets/banner-v2.png" alt="БРОДЯГА — локальный AI-стек" width="100%">
 
   <p><strong>Локальный AI без облачной обязаловки: чат, зрение и coding agent в одном репозитории.</strong></p>
 
