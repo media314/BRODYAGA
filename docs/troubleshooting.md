@@ -66,6 +66,24 @@ sudo modprobe nvidia_uvm
 docker compose -f compose.yaml up -d --force-recreate ollama
 ```
 
+### RTX 3060 12 ГБ использует много оперативной памяти
+
+```bash
+make memory
+```
+
+- `PROCESSOR = 100% GPU` — веса модели целиком на видеокарте.
+- `CPU/GPU` — часть модели выгружена в RAM; поставьте контекст 8K/16K или модель 4B.
+- Держите `OLLAMA_MAX_LOADED_MODELS=1` и `OLLAMA_NUM_PARALLEL=1`.
+- Включите `OLLAMA_FLASH_ATTENTION=1` и `OLLAMA_KV_CACHE_TYPE=q8_0`.
+- `OLLAMA_KEEP_ALIVE=0` освобождает модель сразу после ответа.
+- В `free -h` оценивайте `available`: файловый cache Linux освобождается по запросу.
+- Для жёстких лимитов запускайте `make rtx3060`; overlay ограничивает Ollama 12 ГБ,
+  а Open WebUI — 4 ГБ host RAM. Превышение лимита завершит контейнер по OOM вместо
+  дальнейшего роста, поэтому сначала уменьшайте модель или контекст.
+
+Полная таблица и порядок проверки: [RTX 3060 12 ГБ](models.md#rtx-3060-12-гб-без-offload-в-ram).
+
 ## Kimi сообщает, что provider не настроен
 
 Запускайте через обёртку:

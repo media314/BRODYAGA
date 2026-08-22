@@ -18,7 +18,9 @@ read_env() {
   awk -F= -v key="$key" '$1 == key {sub(/^[^=]*=/, ""); print; exit}' "$ROOT_DIR/.env"
 }
 
-[[ -f "$ROOT_DIR/.env" ]] || cp "$ROOT_DIR/.env.example" "$ROOT_DIR/.env"
+if [[ ! -f "$ROOT_DIR/.env" && ( -z "${QWEN_MODEL:-}" || -z "${VLM_MODEL:-}" ) ]]; then
+  cp "$ROOT_DIR/.env.example" "$ROOT_DIR/.env"
+fi
 QWEN_MODEL="${QWEN_MODEL:-$(read_env QWEN_MODEL)}"
 VLM_MODEL="${VLM_MODEL:-$(read_env VLM_MODEL)}"
 

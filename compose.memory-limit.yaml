@@ -1,0 +1,6 @@
+services:
+  ollama:
+    mem_limit: ${OLLAMA_MEMORY_LIMIT:-12g}
+
+  open-webui:
+    mem_limit: ${WEBUI_MEMORY_LIMIT:-4g}
