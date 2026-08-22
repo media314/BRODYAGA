@@ -4,6 +4,7 @@
   <p><strong>Локальный AI без облачной обязаловки: чат, зрение и coding agent в одном репозитории.</strong></p>
 
   <p>
+    <a href="https://github.com/media314/BRODYAGA/actions/workflows/validate.yml"><img alt="Validate" src="https://github.com/media314/BRODYAGA/actions/workflows/validate.yml/badge.svg"></a>
     <img alt="Docker Compose" src="https://img.shields.io/badge/Docker_Compose-ready-2496ED?logo=docker&logoColor=white">
     <img alt="Qwen 3" src="https://img.shields.io/badge/Qwen_3-LLM-6C5CE7">
     <img alt="Qwen 3 VL" src="https://img.shields.io/badge/Qwen_3_VL-vision-00B894">
