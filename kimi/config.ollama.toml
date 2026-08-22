@@ -1,0 +1,34 @@
+# Reference configuration for Kimi Code CLI + local Ollama.
+# Copy to ~/.kimi-code/config.toml only if you want a global configuration.
+
+default_model = "ollama/qwen3:8b"
+default_permission_mode = "manual"
+default_plan_mode = false
+telemetry = false
+
+[providers.ollama]
+type = "openai"
+base_url = "http://127.0.0.1:11434/v1"
+api_key = "ollama"
+
+[models."ollama/qwen3:8b"]
+provider = "ollama"
+model = "qwen3:8b"
+display_name = "Qwen 3 8B · local Ollama"
+max_context_size = 32768
+capabilities = ["thinking", "tool_use"]
+
+[models."ollama/qwen3-vl:8b"]
+provider = "ollama"
+model = "qwen3-vl:8b"
+display_name = "Qwen 3 VL 8B · local Ollama"
+max_context_size = 32768
+capabilities = ["thinking", "image_in", "tool_use"]
+
+[thinking]
+enabled = true
+keep = "all"
+
+[[permission.rules]]
+decision = "deny"
+pattern = "Bash(rm -rf*)"

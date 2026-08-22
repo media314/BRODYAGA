@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="420" viewBox="0 0 1280 420" role="img" aria-labelledby="title desc">
+  <title id="title">БРОДЯГА</title>
+  <desc id="desc">Локальный AI-стек: Open WebUI, Qwen, vision и Kimi Code</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#07111f"/>
+      <stop offset="0.55" stop-color="#111b35"/>
+      <stop offset="1" stop-color="#20113c"/>
+    </linearGradient>
+    <radialGradient id="sun" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#ffca6a" stop-opacity=".95"/>
+      <stop offset="1" stop-color="#ff6b6b" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="road" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7c5cff" stop-opacity=".2"/>
+      <stop offset="1" stop-color="#00d2d3" stop-opacity=".85"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="8" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect width="1280" height="420" rx="26" fill="url(#bg)"/>
+  <circle cx="1060" cy="110" r="150" fill="url(#sun)"/>
+
+  <g fill="#fff" opacity=".8">
+    <circle cx="92" cy="72" r="2"/><circle cx="190" cy="128" r="1.5"/>
+    <circle cx="321" cy="62" r="2"/><circle cx="910" cy="67" r="1.5"/>
+    <circle cx="1172" cy="191" r="2"/><circle cx="824" cy="147" r="1"/>
+    <circle cx="706" cy="62" r="1.5"/><circle cx="1207" cy="61" r="1"/>
+  </g>
+
+  <path d="M0 334 L165 234 L310 313 L456 198 L608 305 L780 211 L930 301 L1090 222 L1280 318 V420 H0Z" fill="#0b1326"/>
+  <path d="M0 370 L202 280 L356 350 L516 273 L700 356 L904 278 L1078 346 L1280 294 V420 H0Z" fill="#0e1930"/>
+  <path d="M624 420 L655 310 L678 310 L720 420Z" fill="url(#road)" opacity=".9"/>
+  <path d="M670 397 L672 373 M667 355 L669 337 M665 325 L666 315" stroke="#d8fff8" stroke-width="3" stroke-linecap="round" opacity=".8"/>
+
+  <g transform="translate(92 100)">
+    <text x="0" y="86" fill="#f8fafc" font-family="Inter,Arial,sans-serif" font-size="88" font-weight="800" letter-spacing="5">БРОДЯГА</text>
+    <rect x="2" y="112" width="555" height="3" rx="2" fill="#00d2d3" filter="url(#glow)"/>
+    <text x="2" y="156" fill="#a9b6d3" font-family="Inter,Arial,sans-serif" font-size="23" letter-spacing="1.4">LOCAL AI • VISION • CODING AGENT</text>
+    <text x="2" y="205" fill="#eef2ff" font-family="Inter,Arial,sans-serif" font-size="19">Open WebUI  ×  Ollama  ×  Qwen 3  ×  Kimi Code</text>
+  </g>
+
+  <g transform="translate(1030 112)" filter="url(#glow)">
+    <path d="M0 -48 L42 -24 L42 24 L0 48 L-42 24 L-42 -24Z" fill="none" stroke="#d8fff8" stroke-width="3"/>
+    <path d="M-18 -12 L0 -24 L18 -12 L18 12 L0 24 L-18 12Z" fill="#00d2d3" opacity=".75"/>
+    <circle cx="0" cy="0" r="6" fill="#fff"/>
+  </g>
+</svg>
