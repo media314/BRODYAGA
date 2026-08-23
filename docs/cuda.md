@@ -11,7 +11,8 @@
 ## 1. Требования
 
 - NVIDIA GPU с compute capability **5.0+**.
-- NVIDIA driver **531+** — минимальное требование Ollama на момент проверки.
+- NVIDIA driver **550+** — минимальное требование Ollama на момент проверки.
+  Для старых GPU с compute capability 5.0–6.2 нужен driver 570+.
 - 64-битный Linux; рекомендуются Ubuntu 24.04/26.04 или другой дистрибутив из
   [матрицы NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/supported-platforms.html).
 - Docker Engine / Docker Desktop и Compose v2.

@@ -18,6 +18,10 @@
 > Qwen 3 VL, плюс [Kimi Code CLI](https://github.com/MoonshotAI/kimi-code), подключённый
 > к тем же моделям через OpenAI-совместимый API.
 
+> 📘 **Нужна инструкция для чайников?** Откройте оформленный
+> [PDF-гайд по установке и работе](docs/guide/BRODYAGA-install-and-work-guide-v1.0.pdf):
+> 26 страниц, 6 схем, RTX 3060, Open WebUI, Qwen 3 VL, Kimi Code и диагностика памяти.
+
 ## Что внутри
 
 | Часть | Роль |
@@ -125,13 +129,14 @@ RAM/VRAM — в [docs/models.md](docs/models.md).
 Это практические ориентиры для **одной активной модели** и контекста около 32K.
 Длинный контекст, параллельные запросы и одновременное удержание двух моделей
 требуют больше памяти. Ollama поддерживает NVIDIA с compute capability 5.0+ и
-драйвером 531+; точный актуальный список есть в [официальной таблице GPU](https://docs.ollama.com/gpu).
+драйвером 550+ (для compute capability 5.0–6.2 нужен 570+); точный актуальный
+список есть в [официальной таблице GPU](https://docs.ollama.com/gpu).
 
 ### Готовый профиль: RTX 3060 12 ГБ
 
 | Параметр | Требование / настройка | Зачем |
 |---|---|---|
-| GPU | GeForce RTX 3060 12 ГБ, driver 531+ | Карта официально поддерживается Ollama |
+| GPU | GeForce RTX 3060 12 ГБ, driver 550+ | Карта официально поддерживается Ollama |
 | RAM | 16 ГБ минимум, 32 ГБ желательно | ОС, Docker, Open WebUI и запас без swap |
 | CPU | 6 ядер / 12 потоков желательно | Загрузка модели и вспомогательные операции |
 | Диск | 25 ГБ свободно, SSD | Образы, две 8B-модели и данные UI |
@@ -170,6 +175,8 @@ make kimi-3060
 
 ## Документация
 
+- [PDF-гайд: установка и работа](docs/guide/BRODYAGA-install-and-work-guide-v1.0.pdf)
+- [Исходник PDF и шесть ImageGen-схем](docs/guide/README.md)
 - [CUDA, NVIDIA driver и Container Toolkit](docs/cuda.md)
 - [Модели, память и профили](docs/models.md)
 - [Kimi Code: установка и подключения](docs/kimi.md)

@@ -23,7 +23,7 @@ docker compose --env-file .env.example -f compose.native.yaml config --quiet
 docker compose --env-file profiles/rtx3060-12gb.env.example -f compose.yaml -f compose.gpu.yaml -f compose.memory-limit.yaml config --quiet
 
 printf 'Checking required documentation...\n'
-for path in README.md LICENSE docs/cuda.md docs/models.md docs/kimi.md docs/troubleshooting.md docs/references.md profiles/rtx3060-12gb.env.example; do
+for path in README.md LICENSE docs/cuda.md docs/models.md docs/kimi.md docs/troubleshooting.md docs/references.md docs/guide/README.md docs/guide/BRODYAGA-install-and-work-guide-v1.0.pdf profiles/rtx3060-12gb.env.example; do
   [[ -s "$path" ]] || { printf 'Missing or empty: %s\n' "$path" >&2; exit 1; }
 done
 
