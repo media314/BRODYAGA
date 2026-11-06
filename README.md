@@ -1,5 +1,21 @@
+# БРОДЯГА · LUGBAKA SKRIPT
+
+> **Ubuntu 26.10 · одна команда для установки**
+
+```bash
+bash lugbaka.sh
+```
+
+**Запустите — и дождитесь своего адреса `http://IP:3000`.** Скрипт установит
+недостающие зависимости, стабильный Docker Engine и Compose, проверит
+NVIDIA/CUDA, поднимет WebUI и Ollama, установит Kimi Code и скачает две модели.
+Если скачан только `lugbaka.sh`, он сам получит закреплённую версию репозитория.
+
+Для проверки без весов моделей: `bash lugbaka.sh --skip-models`.
+Параметры и управление — [ниже](#ubuntu-2610-lugbaka-skript).
+
 <div align="center">
-  <img src="assets/banner-v2.png" alt="БРОДЯГА — локальный AI-стек" width="100%">
+  <img src="assets/lugbaka-master-v1.png" alt="LUGBAKA SKRIPT — объёмная надпись, дождь и лужа" width="100%">
 
   <p><strong>Локальный AI без облачной обязаловки: чат, зрение и coding agent в одном репозитории.</strong></p>
 
@@ -12,6 +28,14 @@
     <img alt="License" src="https://img.shields.io/badge/license-MIT-F5B942">
   </p>
 </div>
+
+Иллюстрация для README создана через ImageGen. Терминальная заставка набрана
+вручную: плотная заливка `#`, чёткие буквы и объёмная тень из `:` и `.`.
+[80 колонок](assets/lugbaka-ascii-80.txt) ·
+[120 колонок](assets/lugbaka-ascii-120.txt) ·
+[160 колонок](assets/lugbaka-ascii-160.txt).
+В терминале размер заставки выбирается автоматически; посмотреть широкую версию:
+`COLUMNS=160 bash lugbaka.sh banner`.
 
 > **БРОДЯГА** — готовая сборка из [Open WebUI](https://docs.openwebui.com/) и
 > [Ollama](https://docs.ollama.com/): интерфейс в стиле ChatGPT, локальные Qwen 3 и
@@ -42,10 +66,55 @@ flowchart LR
     O --> V[Qwen 3 VL]
 ```
 
-По умолчанию сервисы доступны **только на `127.0.0.1`**. Чаты и модели остаются
-в Docker volumes, а внешние API-ключи для локального режима не нужны.
+Исходные Compose-конфигурации публикуют сервисы на `127.0.0.1`.
+LUGBAKA открывает WebUI по сетевому IP, сохраняя Ollama на loopback.
+Чаты и модели остаются в Docker volumes, внешние API-ключи для локального режима
+не нужны.
 
 ## Быстрый старт
+
+### Ubuntu 26.10: LUGBAKA SKRIPT
+
+```bash
+bash lugbaka.sh
+```
+
+Установщик с ASCII-заставкой устанавливает недостающие зависимости, Docker Engine
+из официального stable-репозитория и Compose plugin, проверяет NVIDIA/CUDA,
+запускает Ollama и Open WebUI, устанавливает Kimi Code в отдельный контейнер
+и скачивает две выбранные модели. В конце выводит проверенный сетевой URL
+вида `http://192.168.1.10:3000`. WebUI слушает сетевой IP, Ollama — только loopback.
+Для установки пакетов может потребоваться обычный ввод пароля sudo в терминале.
+
+```bash
+bash lugbaka.sh --gpu                # NVIDIA, две модели 8B
+bash lugbaka.sh --cpu --light        # CPU, две модели 4B
+bash lugbaka.sh --skip-models        # проверка установки без скачивания весов
+bash lugbaka.sh --port 8080          # другой порт WebUI
+bash lugbaka.sh kimi /path/to/code  # терминальный агент
+bash lugbaka.sh status
+bash lugbaka.sh down                # модели и чаты сохраняются
+```
+
+Ubuntu 26.10 использует apt-suite `stonking`; подмена на пакеты другой Ubuntu
+не выполняется. Поддержаны также 24.04 и 26.04. Драйвер NVIDIA и полный CUDA Toolkit
+автоматически не заменяются: при несовместимости установщик сообщает точную
+причину. Для CUDA 13.x / RTX 50xx проверяется драйвер >=580. NVIDIA Container
+Toolkit устанавливается при необходимости; используется существующий NVIDIA
+runtime либо CDI без перезапуска Docker. Существующие контейнеры не останавливаются.
+
+Повторный запуск сохраняет `.env`, чаты и скачанные части моделей. Настройки
+создаются в `.runtime/lugbaka`, Kimi не меняет конфигурацию в домашней папке хоста.
+Первую учётную запись администратора создайте при открытии WebUI.
+Для хостов с большим количеством Docker-сетей предусмотрен `--subnet CIDR`:
+он задаёт отдельную свободную приватную подсеть только этого стека.
+
+Установка опирается на официальные инструкции
+[Docker для Ubuntu](https://docs.docker.com/engine/install/ubuntu/),
+[NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
+и [требования Ollama к GPU](https://docs.ollama.com/gpu).
+
+### Исходные способы запуска
 
 Нужны Git и Docker с Compose. Для NVIDIA GPU сначала выполните
 [инструкцию по драйверу и NVIDIA Container Toolkit](docs/cuda.md).

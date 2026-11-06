@@ -1,0 +1,10 @@
+Tool: built-in image_gen (no CLI fallback).
+Generated: 2026-11-07, Europe/Moscow.
+Raster master: lugbaka-master-v1.png.
+Current ASCII banners are a hand-lettered revision approved by the user.
+They use # faces, :/. extrusion shadows, and a structured puddle.
+The raster is a preserved README concept and is not the source of the current terminal banners.
+
+Final generation prompt:
+
+Use case: stylized-concept. Asset type: a finished monochrome raster master that will subsequently be traced into dense ASCII art for a Linux terminal installer. Create an impressive, cohesive, richly filled typographic composition, landscape 3:2. Pure black background, bright white lettering and water with a little mid-gray for shadows. Exact text, and no other text: first line 'LUGBAKA' (L U G B A K A), second line 'SKRIPT' (S K R I P T). Enormous highly legible heavy block letters with convincing 3D extrusion, bevels, and thick graphic outlines, occupying most of the top two thirds. The two lines must fill the width boldly. The letters look like massive polished wet industrial blocks emerging above a beautiful wide shallow puddle. Bottom third: a substantial, highly detailed puddle spreading almost edge to edge, with multiple concentric ripples, thick bright outlined splashes, droplets, reflections of the letters, and one large falling teardrop at the center. A few stylized rain streaks complete the top and sides. Fill the composition with purposeful volume and interesting water detail, not a small logo floating in empty space. Style: dramatic black-and-white linocut meets retro computer demoscene title screen, crisp broad shapes, strong silhouettes, controlled detail. Essential: readability survives reduction to 140 columns and roughly 55 terminal rows. Avoid hairline-only drawing, blurry glow, photographic grain, tiny detail, gradients, tiny captions, UI panels, logos, watermarks. Do NOT draw ASCII characters; draw the actual graphic master for subsequent tracing.

@@ -5,22 +5,22 @@ ROOT_DIR="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 printf 'Checking shell syntax...\n'
-for script in scripts/*.sh; do
+for script in lugbaka.sh scripts/*.sh; do
   bash -n "$script"
 done
 
 if command -v shellcheck >/dev/null 2>&1; then
   printf 'Running ShellCheck...\n'
-  shellcheck scripts/*.sh
+  LC_ALL=C.UTF-8 shellcheck lugbaka.sh scripts/*.sh
 else
   printf 'ShellCheck not installed; skipped.\n'
 fi
 
 printf 'Checking Compose files...\n'
-docker compose --env-file .env.example -f compose.yaml config --quiet
-docker compose --env-file .env.example -f compose.yaml -f compose.gpu.yaml config --quiet
-docker compose --env-file .env.example -f compose.native.yaml config --quiet
-docker compose --env-file profiles/rtx3060-12gb.env.example -f compose.yaml -f compose.gpu.yaml -f compose.memory-limit.yaml config --quiet
+docker --context "${DOCKER_CONTEXT:-default}" compose --env-file .env.example -f compose.yaml config --quiet
+docker --context "${DOCKER_CONTEXT:-default}" compose --env-file .env.example -f compose.yaml -f compose.gpu.yaml config --quiet
+docker --context "${DOCKER_CONTEXT:-default}" compose --env-file .env.example -f compose.native.yaml config --quiet
+docker --context "${DOCKER_CONTEXT:-default}" compose --env-file profiles/rtx3060-12gb.env.example -f compose.yaml -f compose.gpu.yaml -f compose.memory-limit.yaml config --quiet
 
 printf 'Checking required documentation...\n'
 for path in README.md LICENSE docs/cuda.md docs/models.md docs/kimi.md docs/troubleshooting.md docs/references.md docs/guide/README.md docs/guide/BRODYAGA-install-and-work-guide-v1.0.pdf profiles/rtx3060-12gb.env.example; do

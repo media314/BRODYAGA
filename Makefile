@@ -58,3 +58,4 @@ kimi-3060: ## Запустить Kimi Code с контекстом 16K для RT
 
 test: ## Проверить shell, Compose и отсутствие секретов
 	./scripts/validate.sh
+	./scripts/test-lugbaka.sh
