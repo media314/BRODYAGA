@@ -602,8 +602,8 @@ origins = [f'http://{address}{port_suffix}' for address in dict.fromkeys((public
 webui['environment'].update(WEBUI_URL=origins[0], CORS_ALLOW_ORIGIN=';'.join(origins))
 kimi = dict(profiles=['tools'], image='node:22.21.1-bookworm', init=True, cpus=1, mem_limit='1g', labels=labels,
     working_dir='/workspace', entrypoint=['bash','/lugbaka/kimi-entry.sh'], environment=dict(KIMI_CODE_HOME='/root/.kimi-code'),
-    volumes=['kimi-tools:/opt/kimi','kimi-home:/root/.kimi-code',volume(runtime,'/lugbaka',True),volume(workspace,'/workspace')])
-doc = dict(services=dict(ollama=ollama, **{'open-webui':webui}, kimi=kimi), volumes={k:{} for k in ('ollama-data','open-webui-data','kimi-tools','kimi-home')})
+    volumes=['kimi-tools:/opt/kimi','kimi-home:/root/.kimi-code','kimi-npm-cache:/root/.npm',volume(runtime,'/lugbaka',True),volume(workspace,'/workspace')])
+doc = dict(services=dict(ollama=ollama, **{'open-webui':webui}, kimi=kimi), volumes={k:{} for k in ('ollama-data','open-webui-data','kimi-tools','kimi-home','kimi-npm-cache')})
 if qa_id:
     # Disposable QA data stays inside this checkout; production volumes are untouched.
     for service in doc['services'].values():
@@ -650,8 +650,38 @@ PY
 set -Eeuo pipefail
 version=2.5.2
 if [[ "${1:-}" == install ]]; then
+  mkdir -p /opt/kimi /root/.npm
   current="$(node -p 'require("/opt/kimi/node_modules/@moonshot-ai/kimi-code/package.json").version' 2>/dev/null || :)"
-  if [[ "$current" != "$version" ]]; then npm install --prefix /opt/kimi --no-audit --no-fund "@moonshot-ai/kimi-code@$version"; fi
+  if [[ "$current" != "$version" || -f /opt/kimi/.lugbaka-install-incomplete ]] || ! /opt/kimi/node_modules/.bin/kimi --version >/dev/null 2>&1; then
+    touch /opt/kimi/.lugbaka-install-incomplete
+    for attempt in 1 2 3; do
+      printf '\nУстановка Kimi: попытка %s/3 (до 3 минут).\n' "$attempt"
+      if timeout --kill-after=10s 180s npm install --prefix /opt/kimi --no-audit --no-fund \
+        --cache /root/.npm --prefer-offline --update-notifier=false \
+        --fetch-retries=1 --fetch-timeout=60000 --fetch-retry-factor=2 \
+        --fetch-retry-mintimeout=2000 --fetch-retry-maxtimeout=5000 \
+        "@moonshot-ai/kimi-code@$version" 2>&1 | tee /root/.npm/lugbaka-last-attempt.log; then
+        /opt/kimi/node_modules/.bin/kimi --version >/dev/null
+        rm -f /opt/kimi/.lugbaka-install-incomplete
+        break
+      else
+        statuses=("${PIPESTATUS[@]}")
+        rc="${statuses[0]}"
+        if ((statuses[1] != 0)); then printf 'Не удалось сохранить журнал npm.\n' >&2; exit 1; fi
+        case "$rc" in 130|137|143) exit "$rc" ;; esac
+        if ((rc != 124)) && ! grep -Eq 'ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENETUNREACH|ENOTFOUND' /root/.npm/lugbaka-last-attempt.log; then
+          printf 'Установка Kimi прервана: ошибка npm, код %s.\n' "$rc" >&2
+          exit "$rc"
+        fi
+        if ((attempt == 3)); then
+          printf 'Kimi пока не установлен: исчерпаны повторы загрузки. Проверьте доступ контейнера к npm registry. Основной стек можно установить с --skip-kimi.\n' >&2
+          exit "$rc"
+        fi
+        printf 'Сетевая ошибка загрузки; повтор через %s секунд. Кэш сохранён.\n' "$((attempt*5))" >&2
+        sleep "$((attempt*5))"
+      fi
+    done
+  fi
   cp /lugbaka/kimi.toml /root/.kimi-code/config.toml
   exec /opt/kimi/node_modules/.bin/kimi --version
 fi
@@ -756,7 +786,8 @@ case "$ACTION" in
     wait_http "http://127.0.0.1:$(read_env OLLAMA_PORT)/api/tags"
     if ((SKIP_KIMI == 0)); then
       say 'Установка Kimi Code 2.5.2 в отдельный контейнер'
-      dc run --rm --no-deps -T kimi install
+      printf 'Журнал установки Kimi: %s/kimi-install.log\n' "$RUNTIME_DIR"
+      dc run --rm --no-deps -T kimi install 2>&1 | tee "$RUNTIME_DIR/kimi-install.log"
     fi
     if ((SKIP_MODELS == 0)); then pull_models; fi
     wait_http "$WEBUI_URL/health"

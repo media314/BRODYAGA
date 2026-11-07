@@ -60,3 +60,4 @@ test: ## Проверить shell, Compose и отсутствие секрет�
 	./scripts/validate.sh
 	./scripts/test-lugbaka.sh
 	./scripts/test-compose-paths.sh
+	./scripts/test-kimi-retry.sh

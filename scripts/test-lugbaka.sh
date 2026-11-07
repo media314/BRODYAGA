@@ -13,6 +13,7 @@ printf '%s\n' "$*" >>"$CALLS"
 case " $* " in
   *' info '*) printf '{"nvidia":{}}\n' ;;
   *' up '*) [[ "${FAIL_UP:-0}" != 1 ]] || exit 17 ;;
+  *' kimi install '*) if [[ "${FAIL_KIMI:-0}" == 1 ]]; then printf 'npm error network read ETIMEDOUT\n' >&2; exit 29; fi ;;
   *' ollama show '*) model="${!#}"; [[ -f "$MODEL_STATE/${model//\//_}" ]] || exit 1 ;;
   *' ollama pull '*)
     [[ "${FAIL_PULL:-0}" != 1 ]] || exit 23
@@ -138,6 +139,15 @@ reject --cpu
 absent 'ollama pull ' "$CALLS"
 unset FAIL_UP
 printf 'PASS: download and startup failures never report success\n'
+
+fixture
+export FAIL_KIMI=1
+if launch --cpu --skip-models; then exit 1; else rc=$?; fi
+[[ "$rc" == 29 ]]
+absent 'БРОДЯГА готова:' "$TEST_ROOT/result"
+has 'ETIMEDOUT' "$CASE_DIR/.runtime/lugbaka/kimi-install.log"
+unset FAIL_KIMI
+printf 'PASS: failed Kimi keeps its exit code, host log and never reports success\n'
 
 fixture
 reject --cpu --port 0
