@@ -111,6 +111,9 @@ has 'entrypoint nvidia-smi' "$CALLS"
 absent 'ollama pull ' "$CALLS"
 has 'kimi install' "$CALLS"
 printf 'PASS: NVIDIA 580 / CUDA 13, container probe, skipped weights\n'
+bash "$CASE_DIR/lugbaka.sh" gpu-check --no-system-changes >"$TEST_ROOT/result" 2>&1
+has 'run --rm --runtime=nvidia --gpus all' "$CALLS"
+printf 'PASS: standalone GPU check selects the NVIDIA runtime explicitly\n'
 
 fixture
 export TEST_DRIVER=535.1

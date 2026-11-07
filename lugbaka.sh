@@ -586,7 +586,9 @@ ollama = dict(image=data['ollama_image'], restart=restart, cpus=1 if qa_id else 
     ports=[dict(target=11434, published=str(data['ollama_port']), host_ip='127.0.0.1', protocol='tcp')],
     environment={key:str(data[key.lower()]) for key in ('OLLAMA_CONTEXT_LENGTH','OLLAMA_KEEP_ALIVE','OLLAMA_MAX_LOADED_MODELS','OLLAMA_NUM_PARALLEL','OLLAMA_FLASH_ATTENTION','OLLAMA_KV_CACHE_TYPE')},
     volumes=['ollama-data:/root/.ollama'], healthcheck=dict(test=['CMD','ollama','list'], interval='10s', timeout='5s', retries=12, start_period='15s'))
-if gpu == 'nvidia': ollama['deploy'] = dict(resources=dict(reservations=dict(devices=[dict(driver='nvidia', count='all', capabilities=['gpu'])])))
+if gpu == 'nvidia':
+    ollama['runtime'] = 'nvidia'
+    ollama['deploy'] = dict(resources=dict(reservations=dict(devices=[dict(driver='nvidia', count='all', capabilities=['gpu'])])))
 elif gpu == 'cdi': ollama['devices'] = ['nvidia.com/gpu=all']
 webui = dict(image=data['webui_image'], restart=restart, cpus=1 if qa_id else 2, mem_limit='2g' if qa_id else '4g', labels=labels,
     depends_on={'ollama':dict(condition='service_healthy')},
@@ -706,7 +708,7 @@ fi
 docker_access
 if [[ "$ACTION" == gpu-check ]]; then
   setup_gpu
-  if [[ "$GPU_STYLE" == cdi ]]; then GPU_FLAGS=(--device nvidia.com/gpu=all); else GPU_FLAGS=(--gpus all); fi
+  if [[ "$GPU_STYLE" == cdi ]]; then GPU_FLAGS=(--device nvidia.com/gpu=all); else GPU_FLAGS=(--runtime=nvidia --gpus all); fi
   "${DOCKER[@]}" run --rm "${GPU_FLAGS[@]}" --entrypoint nvidia-smi ollama/ollama:0.32.15 --query-gpu=name,driver_version --format=csv,noheader
   exit 0
 fi

@@ -54,6 +54,7 @@ assert doc['services']['open-webui']['ports'][0]['published'] == '33047'
 assert doc['services']['ollama']['ports'][0]['published'] == '33447'
 assert not pathlib.Path(root, '.env').exists(), 'fresh install must not require/create an env file'
 if sys.argv[3] == 'nvidia':
+    assert doc['services']['ollama']['runtime'] == 'nvidia'
     assert doc['services']['ollama']['deploy']['resources']['reservations']['devices'][0]['driver'] == 'nvidia'
 elif sys.argv[3] == 'cdi':
     assert doc['services']['ollama']['devices'][0]['source'] == 'nvidia.com/gpu=all'
