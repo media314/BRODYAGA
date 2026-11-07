@@ -3,9 +3,9 @@ set -Eeuo pipefail
 
 ROOT_DIR="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 MODEL=""
-BASE_URL="http://127.0.0.1:11434/v1"
+BASE_URL=""
 CONTEXT_SIZE="32768"
-TARGET_DIR="."
+TARGET_DIR="$ROOT_DIR"
 
 usage() {
   cat <<'EOF'
@@ -44,10 +44,30 @@ command -v kimi >/dev/null 2>&1 || {
 }
 
 if [[ -z "$MODEL" ]]; then
-  if [[ -f "$ROOT_DIR/.env" ]]; then
+  if [[ -f "$ROOT_DIR/.runtime/lugbaka/settings.json" ]]; then
+    MODEL="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["qwen_model"])' "$ROOT_DIR/.runtime/lugbaka/settings.json")"
+  elif [[ -f "$ROOT_DIR/.env" ]]; then
     MODEL="$(read_env QWEN_MODEL)"
   fi
   MODEL="${MODEL:-qwen3:8b}"
+fi
+
+if [[ -z "$BASE_URL" ]]; then
+  OLLAMA_PORT=11434
+  OLLAMA_BIND=127.0.0.1
+  if [[ -f "$ROOT_DIR/.runtime/lugbaka/settings.json" ]]; then
+    OLLAMA_PORT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["ollama_port"])' "$ROOT_DIR/.runtime/lugbaka/settings.json")"
+  elif [[ -f "$ROOT_DIR/.env" ]]; then
+    OLLAMA_PORT="$(read_env OLLAMA_PORT)"
+    OLLAMA_PORT="${OLLAMA_PORT:-11434}"
+    OLLAMA_BIND="$(read_env OLLAMA_BIND)"
+    OLLAMA_BIND="${OLLAMA_BIND:-127.0.0.1}"
+    [[ "$OLLAMA_BIND" != 0.0.0.0 ]] || OLLAMA_BIND=127.0.0.1
+  fi
+  if [[ ! "$OLLAMA_PORT" =~ ^[0-9]{1,5}$ ]] || ((10#$OLLAMA_PORT < 1 || 10#$OLLAMA_PORT > 65535)); then
+    printf 'Invalid saved Ollama port.\n' >&2; exit 2
+  fi
+  BASE_URL="http://$OLLAMA_BIND:$OLLAMA_PORT/v1"
 fi
 
 [[ "$MODEL" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*(:[A-Za-z0-9][A-Za-z0-9._-]*)?$ ]] || {

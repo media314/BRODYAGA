@@ -33,7 +33,7 @@ case "$*" in
 esac
 SH
 chmod +x "$TEST_ROOT/bin/"*
-export PATH="$TEST_ROOT/bin:$PATH" LUGBAKA_NO_SYSTEM_CHANGES=1 NO_COLOR=1
+export PATH="$TEST_ROOT/bin:$PATH" NO_COLOR=1
 export CALLS="$TEST_ROOT/calls"
 export MODEL_STATE="$TEST_ROOT/models"
 CASE_NO=0
@@ -46,19 +46,39 @@ fixture() {
   mkdir "$MODEL_STATE"
   : >"$CALLS"
 }
-launch() { bash "$CASE_DIR/lugbaka.sh" --bind 127.0.0.1 "$@" >"$TEST_ROOT/result" 2>&1; }
+launch() { bash "$CASE_DIR/lugbaka.sh" --no-system-changes --bind 127.0.0.1 "$@" >"$TEST_ROOT/result" 2>&1; }
 has() { grep -Fq -- "$1" "$2" || { cat "$TEST_ROOT/result"; printf 'Missing: %s\n' "$1" >&2; exit 1; }; }
 absent() { if grep -Fq -- "$1" "$2"; then printf 'Unexpected: %s\n' "$1" >&2; exit 1; fi; }
 reject() { if launch "$@"; then printf 'Expected failure: %s\n' "$*" >&2; exit 1; fi; absent 'БРОДЯГА готова:' "$TEST_ROOT/result"; }
 
 fixture
+cp "$CASE_DIR/.env.example" "$CASE_DIR/.env"
+cat >>"$CASE_DIR/.env" <<'ENV'
+
+PRESERVE_MARKER=keep-me
+OLLAMA_CONTEXT_LENGTH=8192
+OLLAMA_FLASH_ATTENTION=0
+OLLAMA_KV_CACHE_TYPE=f16
+WEBUI_AUTH=true # keep authentication
+WEBUI_NAME="Team $HOME # local"
+ENV
+before="$(sha256sum "$CASE_DIR/.env")"
 launch --cpu --port 33047 --ollama-port 33447
 has 'ollama pull qwen3:8b' "$CALLS"
 has 'ollama pull qwen3-vl:8b' "$CALLS"
 has 'kimi install' "$CALLS"
 has 'http://127.0.0.1:33047' "$TEST_ROOT/result"
-printf '\nPRESERVE_MARKER=keep-me\n' >>"$CASE_DIR/.env"
-before="$(sha256sum "$CASE_DIR/.env")"
+[[ "$before" == "$(sha256sum "$CASE_DIR/.env")" ]]
+python3 - "$CASE_DIR/.runtime/lugbaka/compose.yaml" <<'PY'
+import json, sys
+values = json.load(open(sys.argv[1]))['services']['ollama']['environment']
+assert values['OLLAMA_CONTEXT_LENGTH'] == '8192'
+assert values['OLLAMA_FLASH_ATTENTION'] == '0'
+assert values['OLLAMA_KV_CACHE_TYPE'] == 'f16'
+webui = json.load(open(sys.argv[1]))['services']['open-webui']['environment']
+assert webui['WEBUI_AUTH'] == 'true'
+assert webui['WEBUI_NAME'] == 'Team $$HOME # local'
+PY
 : >"$CALLS"
 launch --cpu
 [[ "$before" == "$(sha256sum "$CASE_DIR/.env")" ]]
@@ -77,7 +97,10 @@ printf 'PASS: light model selection\n'
 
 fixture
 launch --cpu --skip-models --subnet 10.231.71.0/24
-has 'subnet: 10.231.71.0/24' "$CASE_DIR/.runtime/lugbaka/compose.yaml"
+python3 - "$CASE_DIR/.runtime/lugbaka/compose.yaml" <<'PY'
+import json, sys
+assert json.load(open(sys.argv[1]))['networks']['default']['ipam']['config'][0]['subnet'] == '10.231.71.0/24'
+PY
 reject --cpu --subnet 8.8.8.0/24
 reject --cpu --subnet 10.231.71.3/24
 printf 'PASS: isolated subnet and invalid subnet rejection\n'

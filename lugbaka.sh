@@ -4,23 +4,27 @@ if [ -z "${BASH_VERSION:-}" ]; then exec bash "$0" "$@"; fi
 set -Eeuo pipefail
 umask 077
 
-SELF="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/$(basename -- "${BASH_SOURCE[0]}")"
+SELF="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/$(basename -- "${BASH_SOURCE[0]}")"
 ROOT="$(dirname -- "$SELF")"
+SCRIPT_DIR="$ROOT"
 UPSTREAM_SHA=0a8c37804d7f65faf8da458e55f3d2705ba8e92c
 ACTION=install
 MODE=auto
 LIGHT=0
 SKIP_MODELS=0
 SKIP_KIMI=0
-PROJECT=lugbaka
+PROJECT=""
 WEB_PORT=""
 OLLAMA_PORT_ARG=""
 BIND_ARG=""
 SUBNET_ARG=""
-DOCKER_CONTEXT="${DOCKER_CONTEXT:-default}"
+DOCKER_CONTEXT=default
+NO_SYSTEM_CHANGES=0
+QA_ID=""
 DOCKER=(docker --context "$DOCKER_CONTEXT")
 AS_ROOT=()
 CONFIG=""
+RUNTIME_DIR=""
 APT_WORK=""
 APT_OPTIONS=()
 
@@ -231,6 +235,8 @@ usage() {
   --project NAME       Отдельное имя Docker Compose (по умолчанию lugbaka)
   --directory PATH     Папка репозитория; при отсутствии скачивается с GitHub
   --docker-context N   Явный Docker context (по умолчанию default)
+  --no-system-changes Проверить установленный Docker без изменения пакетов ОС
+  --qa-id NAME         Изолированная временная проверка с ограничением ресурсов
 
 GPU: драйвер >=550; для CUDA 13.x и RTX 50xx нужен драйвер >=580.
 Драйвер, CUDA Toolkit и перезагрузка ОС автоматически не выполняются.
@@ -238,12 +244,14 @@ HELP
 }
 
 need_value() { [[ $# -ge 2 && -n "$2" && "$2" != --* ]] || die "Для $1 нужно значение."; }
-KIMI_PROJECT="$PWD"
+KIMI_PROJECT=""
 while (($#)); do
   case "$1" in
     install|prepare|status|logs|down|pull|check|gpu-check|banner) ACTION="$1"; shift ;;
     kimi) ACTION=kimi; shift; if (($#)) && [[ "$1" != --* ]]; then KIMI_PROJECT="$1"; shift; fi ;;
     --gpu|--cpu) MODE="${1#--}"; shift ;;
+    --no-system-changes) NO_SYSTEM_CHANGES=1; shift ;;
+    --qa-id) need_value "$@"; QA_ID="$2"; shift 2 ;;
     --light) LIGHT=1; shift ;;
     --skip-models) SKIP_MODELS=1; shift ;;
     --skip-kimi) SKIP_KIMI=1; shift ;;
@@ -258,7 +266,7 @@ while (($#)); do
     *) die "Неизвестный параметр: $1. См. --help." ;;
   esac
 done
-[[ "$PROJECT" =~ ^[a-z0-9][a-z0-9_-]*$ ]] || die 'Недопустимое имя --project.'
+[[ -z "$PROJECT" || "$PROJECT" =~ ^[a-z0-9][a-z0-9_-]*$ ]] || die 'Недопустимое имя --project.'
 for p in "$WEB_PORT" "$OLLAMA_PORT_ARG"; do
   [[ -z "$p" ]] || { [[ "$p" =~ ^[0-9]{1,5}$ ]] && ((10#$p > 0 && 10#$p <= 65535)); } || die 'Порт должен быть от 1 до 65535.'
 done
@@ -345,7 +353,7 @@ install_dependencies() {
   local package conflict
   ubuntu
   local missing=()
-  for package in curl git iproute2 ca-certificates gnupg; do
+  for package in curl git iproute2 ca-certificates gnupg python3; do
     dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -q '^install ok installed$' || missing+=("$package")
   done
   if ((${#missing[@]})); then apt_update; apt_install "${missing[@]}"; fi
@@ -416,7 +424,7 @@ setup_gpu() {
     GPU_STYLE=cdi
     return
   fi
-  [[ "${LUGBAKA_NO_SYSTEM_CHANGES:-0}" != 1 ]] || die 'NVIDIA Container Toolkit/CDI не настроен; системные изменения отключены для этой проверки.'
+  [[ "$NO_SYSTEM_CHANGES" != 1 ]] || die 'NVIDIA Container Toolkit/CDI не настроен; системные изменения отключены для этой проверки.'
   local engine_version
   engine_version="$("${DOCKER[@]}" version --format '{{.Server.Version}}')"
   dpkg --compare-versions "$engine_version" ge 28.3.0 || die 'Для установки GPU без перезапуска Docker нужен Docker >=28.3 с CDI. Обновите Engine в согласованное время или используйте --cpu.'
@@ -424,6 +432,7 @@ setup_gpu() {
     root_access
     https https://nvidia.github.io/libnvidia-container/gpgkey |
       "${AS_ROOT[@]}" gpg --dearmor --batch --yes -o /usr/share/keyrings/lugbaka-nvidia.gpg
+    "${AS_ROOT[@]}" chmod 0644 /usr/share/keyrings/lugbaka-nvidia.gpg
     https https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list |
       sed 's#deb https://#deb [signed-by=/usr/share/keyrings/lugbaka-nvidia.gpg] https://#g' |
       "${AS_ROOT[@]}" tee /etc/apt/sources.list.d/lugbaka-nvidia.list >/dev/null
@@ -442,55 +451,28 @@ setup_gpu() {
   GPU_STYLE=cdi
 }
 
-read_env() { awk -F= -v k="$1" '$1==k {sub(/^[^=]*=/, ""); print; exit}' "$ROOT/.env"; }
-set_env() {
-  local tmp
-  tmp="$(mktemp "$ROOT/.runtime/lugbaka/env.XXXXXX")"
-  awk -F= -v k="$1" -v v="$2" '$1==k {if (!found++) print k "=" v; next} {print} END {if (!found) print k "=" v}' "$ROOT/.env" >"$tmp"
-  chmod 0600 "$tmp"; mv -- "$tmp" "$ROOT/.env"
+read_env() {
+  python3 - "$RUNTIME_DIR/settings.json" "$1" <<'PY'
+import json, sys
+keys = {'WEBUI_BIND': 'webui_bind', 'WEBUI_PORT': 'webui_port', 'OLLAMA_PORT': 'ollama_port',
+        'QWEN_MODEL': 'qwen_model', 'VLM_MODEL': 'vlm_model', 'PROJECT': 'project'}
+print(json.load(open(sys.argv[1]))[keys[sys.argv[2]]])
+PY
 }
 lan_ip() { ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") {print $(i+1);exit}}'; }
-ipv4() { awk -F. 'NF!=4 {exit 1} {for(i=1;i<=4;i++) if($i !~ /^[0-9]+$/ || $i>255) exit 1}' <<<"$1"; }
-validate_subnet() {
-  local address prefix last
-  [[ "$1" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/2[4-8]$ ]] || die 'Нужна приватная IPv4 подсеть с маской /24–/28.'
-  address="${1%/*}"; prefix="${1##*/}"; last="${address##*.}"
-  ipv4 "$address" || die 'Некорректный IPv4 подсети.'
-  case "$address" in 10.*|192.168.*|172.1[6-9].*|172.2[0-9].*|172.3[01].*) ;; *) die 'Подсеть должна быть приватной (10/8, 172.16/12 или 192.168/16).' ;; esac
-  ((10#$last % (1 << (32-prefix)) == 0)) || die 'В --subnet нужен адрес сети, а не отдельного узла.'
-}
-compose() { "${DOCKER[@]}" compose --project-directory "$ROOT" --env-file "$ROOT/.env" --project-name "$PROJECT" -f "$ROOT/compose.yaml" -f "$CONFIG" "$@"; }
+compose() { "${DOCKER[@]}" compose --project-directory "$ROOT" --env-file /dev/null --project-name "$PROJECT" -f "$CONFIG" "$@"; }
 
 configure() {
-  local bind old_mode subnet
-  mkdir -p "$ROOT/.runtime/lugbaka"
-  if [[ ! -f "$ROOT/.env" ]]; then
-    cp -- "$ROOT/.env.example" "$ROOT/.env"
-    bind="${BIND_ARG:-$(lan_ip)}"
-    [[ -n "$bind" ]] || die 'Сетевой IPv4 не найден. Укажите --bind IPv4.'
-    set_env WEBUI_BIND "$bind"
-    set_env OLLAMA_CONTEXT_LENGTH 16384
-    set_env OLLAMA_KEEP_ALIVE 0
+  local old_mode project_dir default_bind
+  command -v python3 >/dev/null || die 'Нужен python3. Выполните bash lugbaka.sh prepare.'
+  RUNTIME_DIR="$ROOT/.runtime/lugbaka"
+  if [[ -n "$QA_ID" ]]; then
+    [[ "$QA_ID" =~ ^[a-z0-9][a-z0-9_-]*$ ]] || die 'Недопустимый QA ID.'
+    RUNTIME_DIR="$ROOT/.runtime/lugbaka-qa/$QA_ID"
   fi
-  [[ -z "$WEB_PORT" ]] || set_env WEBUI_PORT "$WEB_PORT"
-  [[ -z "$OLLAMA_PORT_ARG" ]] || set_env OLLAMA_PORT "$OLLAMA_PORT_ARG"
-  [[ -z "$BIND_ARG" ]] || set_env WEBUI_BIND "$BIND_ARG"
-  if [[ -n "$SUBNET_ARG" ]]; then validate_subnet "$SUBNET_ARG"; set_env LUGBAKA_SUBNET "$SUBNET_ARG"; fi
-  subnet="$(read_env LUGBAKA_SUBNET)"
-  [[ -z "$subnet" ]] || validate_subnet "$subnet"
-  bind="$(read_env WEBUI_BIND)"; ipv4 "$bind" || die 'WEBUI_BIND должен быть IPv4.'
-  for p in "$(read_env WEBUI_PORT)" "$(read_env OLLAMA_PORT)"; do
-    if [[ ! "$p" =~ ^[0-9]{1,5}$ ]]; then die 'Недопустимый порт в .env.'; fi
-    if ((10#$p < 1 || 10#$p > 65535)); then die 'Недопустимый порт в .env.'; fi
-  done
-  [[ "$(read_env OLLAMA_BIND)" == 127.0.0.1 ]] || die 'OLLAMA_BIND должен оставаться 127.0.0.1.'
-  if ((LIGHT)); then set_env QWEN_MODEL qwen3:4b; set_env VLM_MODEL qwen3-vl:4b; fi
-  QWEN_MODEL="$(read_env QWEN_MODEL)"; VLM_MODEL="$(read_env VLM_MODEL)"
-  for model in "$QWEN_MODEL" "$VLM_MODEL"; do
-    [[ "$model" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*(:[A-Za-z0-9][A-Za-z0-9._-]*)?$ ]] || die 'Недопустимое имя модели в .env.'
-  done
-  if [[ "$MODE" == auto && -f "$ROOT/.runtime/lugbaka/mode" ]]; then
-    old_mode="$(cat "$ROOT/.runtime/lugbaka/mode")"
+  mkdir -p "$RUNTIME_DIR"
+  if [[ "$MODE" == auto && -f "$RUNTIME_DIR/mode" ]]; then
+    old_mode="$(cat "$RUNTIME_DIR/mode")"
     case "$old_mode" in cpu|gpu) MODE="$old_mode" ;; *) die 'Повреждено сохранённое значение режима.' ;; esac
   fi
   if [[ "$MODE" == auto ]]; then
@@ -499,103 +481,175 @@ configure() {
       MODE=gpu
     elif grep -lq '^0x10de$' /sys/bus/pci/devices/*/vendor 2>/dev/null; then
       die 'Найдена NVIDIA без nvidia-smi. Установите рекомендуемый драйвер Ubuntu и перезагрузитесь; либо явно выберите --cpu.'
-    else
-      MODE=cpu
+    else MODE=cpu
     fi
   fi
   GPU_STYLE=none
   if [[ "$MODE" == gpu ]]; then
-    if [[ "$ACTION" == install ]]; then
-      setup_gpu
-    elif [[ -f "$ROOT/.runtime/lugbaka/gpu-style" ]]; then
-      GPU_STYLE="$(cat "$ROOT/.runtime/lugbaka/gpu-style")"
+    if [[ "$ACTION" == install ]]; then setup_gpu
+    elif [[ -f "$RUNTIME_DIR/gpu-style" ]]; then
+      GPU_STYLE="$(cat "$RUNTIME_DIR/gpu-style")"
       case "$GPU_STYLE" in nvidia|cdi) ;; *) die 'Повреждено сохранённое значение GPU.' ;; esac
-    else
-      die 'Сначала выполните install --gpu.'
+    else die 'Сначала выполните install --gpu.'
     fi
   fi
-  printf '%s\n' "$MODE" >"$ROOT/.runtime/lugbaka/mode"
-  printf '%s\n' "$GPU_STYLE" >"$ROOT/.runtime/lugbaka/gpu-style"
-  CONFIG="$ROOT/.runtime/lugbaka/compose.yaml"
-  export LUGBAKA_RUNTIME_DIR="$ROOT/.runtime/lugbaka"
-  export LUGBAKA_PROJECT_DIR
-  if [[ "$ACTION" == kimi ]]; then
-    LUGBAKA_PROJECT_DIR="$(cd -- "$KIMI_PROJECT" && pwd)"
-  else
-    LUGBAKA_PROJECT_DIR="$ROOT"
-  fi
-  cat >"$CONFIG" <<'YAML'
-services:
-  ollama:
-    cpus: ${LUGBAKA_OLLAMA_CPUS:-4}
-    mem_limit: ${LUGBAKA_OLLAMA_MEMORY:-12g}
-    restart: ${LUGBAKA_RESTART:-unless-stopped}
-    labels: &qa
-      com.facex.qa.temporary: "${LUGBAKA_QA_TEMPORARY:-false}"
-      com.facex.qa.owner: "${LUGBAKA_QA_OWNER:-lugbaka}"
-      com.facex.qa.kind: container
-      com.facex.qa.created_at: "${LUGBAKA_QA_CREATED:-0}"
-      com.facex.qa.expires_at: "${LUGBAKA_QA_EXPIRES:-0}"
-  open-webui:
-    cpus: ${LUGBAKA_WEBUI_CPUS:-2}
-    mem_limit: ${LUGBAKA_WEBUI_MEMORY:-4g}
-    restart: ${LUGBAKA_RESTART:-unless-stopped}
-    environment:
-      RAG_EMBEDDING_MODEL_AUTO_UPDATE: "false"
-      WHISPER_MODEL_AUTO_UPDATE: "false"
-    healthcheck:
-      test: [CMD-SHELL, "curl --silent --fail http://localhost:8080/health | jq -ne 'input.status == true'"]
-      interval: 10s
-      timeout: 5s
-      start_period: 120s
-      retries: 36
-    labels: *qa
-  kimi:
-    profiles: [tools]
-    image: ${LUGBAKA_KIMI_IMAGE:-node:22.21.1-bookworm}
-    init: true
-    cpus: 1
-    mem_limit: 1g
-    working_dir: /workspace
-    entrypoint: [bash, /lugbaka/kimi-entry.sh]
-    environment:
-      KIMI_CODE_HOME: /root/.kimi-code
-    volumes:
-      - kimi-tools:/opt/kimi
-      - kimi-home:/root/.kimi-code
-      - ${LUGBAKA_RUNTIME_DIR}:/lugbaka:ro
-      - ${LUGBAKA_PROJECT_DIR}:/workspace
-    labels: *qa
-volumes:
-  kimi-tools:
-  kimi-home:
-YAML
-  if [[ -n "$subnet" ]]; then
-    printf '\nnetworks:\n  default:\n    ipam:\n      config:\n        - subnet: %s\n' "$subnet" >>"$CONFIG"
-  fi
-  case "$GPU_STYLE" in
-    nvidia) cat >>"$CONFIG" <<'YAML'
-x-gpu-selected: nvidia
-YAML
-      # Add the upstream NVIDIA reservation as a third compose file below.
-      ;;
-    cdi) cat >"$ROOT/.runtime/lugbaka/gpu-cdi.yaml" <<'YAML'
-services:
-  ollama:
-    devices:
-      - nvidia.com/gpu=all
-YAML
-      ;;
-  esac
-  cat >"$ROOT/.runtime/lugbaka/kimi-entry.sh" <<'SH'
+  project_dir="$ROOT"
+  if [[ "$ACTION" == kimi && -n "$KIMI_PROJECT" ]]; then project_dir="$(cd -- "$KIMI_PROJECT" && pwd -P)"; fi
+  default_bind="$BIND_ARG"
+  if [[ -z "$default_bind" || "$default_bind" == 0.0.0.0 ]]; then default_bind="$(lan_ip || :)"; fi
+  python3 - "$ROOT" "$RUNTIME_DIR" "$project_dir" "$GPU_STYLE" "$LIGHT" "$WEB_PORT" "$OLLAMA_PORT_ARG" "$BIND_ARG" "$default_bind" "$SUBNET_ARG" "$PROJECT" "$QA_ID" <<'PY'
+import ipaddress, json, os, pathlib, re, shlex, socket, sys, time
+root = pathlib.Path(sys.argv[1])
+runtime = pathlib.Path(sys.argv[2])
+workspace, gpu, light, web_port, ollama_port, bind, detected_bind, subnet, project, qa_id = sys.argv[3:]
+settings_path = runtime / 'settings.json'
+data = dict(webui_bind=detected_bind, webui_port=3000, ollama_port=11434, webui_name='БРОДЯГА',
+            qwen_model='qwen3:8b', vlm_model='qwen3-vl:8b', project='lugbaka', subnet='',
+            ollama_image='ollama/ollama:0.32.15', webui_image='ghcr.io/open-webui/open-webui:v0.11.0',
+            enable_signup='true', webui_auth='true', ollama_context_length='16384', ollama_keep_alive='0',
+            ollama_max_loaded_models='1', ollama_num_parallel='1', ollama_flash_attention='1', ollama_kv_cache_type='q8_0')
+legacy_keys = {'WEBUI_BIND':'webui_bind', 'WEBUI_PORT':'webui_port', 'OLLAMA_PORT':'ollama_port',
+               'WEBUI_NAME':'webui_name', 'QWEN_MODEL':'qwen_model', 'VLM_MODEL':'vlm_model',
+               'OLLAMA_IMAGE':'ollama_image', 'OPEN_WEBUI_IMAGE':'webui_image',
+               'ENABLE_SIGNUP':'enable_signup', 'WEBUI_AUTH':'webui_auth', 'LUGBAKA_SUBNET':'subnet',
+               **{key: key.lower() for key in ('OLLAMA_CONTEXT_LENGTH','OLLAMA_KEEP_ALIVE','OLLAMA_MAX_LOADED_MODELS','OLLAMA_NUM_PARALLEL','OLLAMA_FLASH_ATTENTION','OLLAMA_KV_CACHE_TYPE')}}
+# Read repository defaults and migrate known old settings as data, never as shell code.
+for filename in ('.env.example', '.env'):
+    if (root / filename).is_file():
+        for line in (root / filename).read_text().splitlines():
+            key, sep, value = line.partition('=')
+            if sep and key in legacy_keys and not (filename == '.env.example' and key.lower().startswith(('ollama_context_', 'ollama_keep_', 'ollama_max_', 'ollama_num_', 'ollama_flash_', 'ollama_kv_'))):
+                value = value.strip()
+                if value.startswith(('"', "'")):
+                    value = ' '.join(shlex.split(value, comments=True))
+                else:
+                    value = re.split(r'\s+#', value, maxsplit=1)[0].strip()
+                data[legacy_keys[key]] = value
+if settings_path.exists(): data.update(json.loads(settings_path.read_text()))
+if not settings_path.exists() and not (root / '.env').exists(): data['webui_bind'] = detected_bind
+if qa_id:
+    expected_project = 'lugbaka-qa-' + qa_id
+    if project and project != expected_project: raise SystemExit('Для QA используется отдельный проект: ' + expected_project)
+    data['project'] = expected_project
+    project = expected_project
+    if not settings_path.exists():
+        data['webui_bind'] = '127.0.0.1'
+        allocated = []
+        for key in ('webui_port', 'ollama_port'):
+            sock = socket.socket()
+            sock.bind(('127.0.0.1', 0))
+            data[key] = sock.getsockname()[1]
+            allocated.append(sock)
+        for sock in allocated: sock.close()
+elif str(data['project']).startswith('lugbaka-qa-') or project.startswith('lugbaka-qa-'):
+    raise SystemExit('Имя lugbaka-qa- зарезервировано: укажите --qa-id для временной проверки.')
+for key, value in [('webui_port', web_port), ('ollama_port', ollama_port), ('webui_bind', bind), ('subnet', subnet), ('project', project)]:
+    if value: data[key] = value
+if light == '1': data.update(qwen_model='qwen3:4b', vlm_model='qwen3-vl:4b')
+try:
+    ipaddress.IPv4Address(data['webui_bind'])
+    for key in ('webui_port', 'ollama_port'):
+        if not re.fullmatch(r'[0-9]{1,5}', str(data[key])) or not 1 <= int(data[key]) <= 65535: raise ValueError('Порт должен быть от 1 до 65535.')
+        data[key] = int(data[key])
+    if data['webui_port'] == data['ollama_port']: raise ValueError('Порты WebUI и Ollama должны различаться.')
+    if not re.fullmatch(r'[a-z0-9][a-z0-9_-]*', data['project']): raise ValueError('Недопустимое имя проекта.')
+    for key in ('qwen_model', 'vlm_model'):
+        if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._/-]*(?::[A-Za-z0-9][A-Za-z0-9._-]*)?', data[key]): raise ValueError('Недопустимое имя модели.')
+    for key in ('ollama_image', 'webui_image'):
+        if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._/:@-]*', data[key]): raise ValueError('Недопустимое имя образа.')
+    for key in ('enable_signup', 'webui_auth'):
+        value = str(data[key]).lower()
+        if value not in ('true', 'false'): raise ValueError(key + ' должен быть true или false.')
+        data[key] = value
+    if (root / '.env').exists():
+        for line in (root / '.env').read_text().splitlines():
+            if line.startswith('OLLAMA_BIND=') and line.partition('=')[2].strip(" '\"") != '127.0.0.1': raise ValueError('OLLAMA_BIND должен оставаться 127.0.0.1.')
+    if data['subnet']:
+        network = ipaddress.IPv4Network(data['subnet'], strict=True)
+        allowed = [ipaddress.IPv4Network(x) for x in ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16')]
+        if not 24 <= network.prefixlen <= 28 or not any(network.subnet_of(x) for x in allowed): raise ValueError('Нужна приватная подсеть /24–/28.')
+    if qa_id and not re.fullmatch(r'[a-zA-Z0-9_-]+', qa_id): raise ValueError('Недопустимый QA ID.')
+except (ValueError, TypeError) as error:
+    raise SystemExit('ОШИБКА конфигурации: ' + str(error))
+def volume(source, target, readonly=False):
+    return dict(type='bind', source=str(source), target=target, read_only=readonly, bind=dict(create_host_path=False))
+def literal_compose(value):
+    if isinstance(value, str): return value.replace('$', '$$')
+    if isinstance(value, list): return [literal_compose(item) for item in value]
+    if isinstance(value, dict): return {key: literal_compose(item) for key, item in value.items()}
+    return value
+created = data.get('qa_created', int(time.time())) if data.get('qa_id') == qa_id else int(time.time())
+labels = {'com.facex.qa.temporary':str(bool(qa_id)).lower(), 'com.facex.qa.owner':qa_id or 'lugbaka',
+          'com.facex.qa.kind':'container', 'com.facex.qa.created_at':str(created), 'com.facex.qa.expires_at':str(created+1800)}
+restart = 'no' if qa_id else 'unless-stopped'
+ollama = dict(image=data['ollama_image'], restart=restart, cpus=1 if qa_id else 4, mem_limit='768m' if qa_id else '12g', labels=labels,
+    ports=[dict(target=11434, published=str(data['ollama_port']), host_ip='127.0.0.1', protocol='tcp')],
+    environment={key:str(data[key.lower()]) for key in ('OLLAMA_CONTEXT_LENGTH','OLLAMA_KEEP_ALIVE','OLLAMA_MAX_LOADED_MODELS','OLLAMA_NUM_PARALLEL','OLLAMA_FLASH_ATTENTION','OLLAMA_KV_CACHE_TYPE')},
+    volumes=['ollama-data:/root/.ollama'], healthcheck=dict(test=['CMD','ollama','list'], interval='10s', timeout='5s', retries=12, start_period='15s'))
+if gpu == 'nvidia': ollama['deploy'] = dict(resources=dict(reservations=dict(devices=[dict(driver='nvidia', count='all', capabilities=['gpu'])])))
+elif gpu == 'cdi': ollama['devices'] = ['nvidia.com/gpu=all']
+webui = dict(image=data['webui_image'], restart=restart, cpus=1 if qa_id else 2, mem_limit='2g' if qa_id else '4g', labels=labels,
+    depends_on={'ollama':dict(condition='service_healthy')},
+    ports=[dict(target=8080, published=str(data['webui_port']), host_ip=data['webui_bind'], protocol='tcp')],
+    environment=dict(OLLAMA_BASE_URL='http://ollama:11434', WEBUI_NAME=data['webui_name'], ENABLE_SIGNUP=data['enable_signup'], WEBUI_AUTH=data['webui_auth'], RAG_EMBEDDING_MODEL_AUTO_UPDATE='false', WHISPER_MODEL_AUTO_UPDATE='false'),
+    volumes=['open-webui-data:/app/backend/data'],
+    healthcheck=dict(test=['CMD','python','-c',"import json,urllib.request; assert json.load(urllib.request.urlopen('http://localhost:8080/health',timeout=4))['status'] is True"], interval='10s', timeout='5s', start_period='120s', retries=36))
+public_ip = data['webui_bind'] if data['webui_bind'] != '0.0.0.0' else (detected_bind or '127.0.0.1')
+port_suffix = '' if data['webui_port'] == 80 else ':' + str(data['webui_port'])
+origins = [f'http://{address}{port_suffix}' for address in dict.fromkeys((public_ip, '127.0.0.1', 'localhost'))]
+webui['environment'].update(WEBUI_URL=origins[0], CORS_ALLOW_ORIGIN=';'.join(origins))
+kimi = dict(profiles=['tools'], image='node:22.21.1-bookworm', init=True, cpus=1, mem_limit='1g', labels=labels,
+    working_dir='/workspace', entrypoint=['bash','/lugbaka/kimi-entry.sh'], environment=dict(KIMI_CODE_HOME='/root/.kimi-code'),
+    volumes=['kimi-tools:/opt/kimi','kimi-home:/root/.kimi-code',volume(runtime,'/lugbaka',True),volume(workspace,'/workspace')])
+doc = dict(services=dict(ollama=ollama, **{'open-webui':webui}, kimi=kimi), volumes={k:{} for k in ('ollama-data','open-webui-data','kimi-tools','kimi-home')})
+if qa_id:
+    # Disposable QA data stays inside this checkout; production volumes are untouched.
+    for service in doc['services'].values():
+        binds = []
+        for item in service['volumes']:
+            if isinstance(item, str):
+                name, target = item.split(':', 1)
+                directory = runtime / 'qa-data' / name
+                directory.mkdir(parents=True, exist_ok=True)
+                binds.append(volume(directory, target))
+            else: binds.append(item)
+        service['volumes'] = binds
+    doc['volumes'] = {}
+if data['subnet']: doc['networks'] = {'default':dict(ipam=dict(config=[dict(subnet=data['subnet'])]))}
+data.update(qa_id=qa_id, qa_created=created)
+for name, value in [('settings.json', data), ('compose.yaml', doc)]:
+    if name == 'compose.yaml': value = literal_compose(value)
+    target = runtime / name
+    temporary = target.with_suffix(target.suffix + '.tmp')
+    temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2) + '\n')
+    os.chmod(temporary, 0o600)
+    temporary.replace(target)
+model = data['qwen_model']
+(runtime / 'kimi.toml').write_text(f'''default_model = "ollama/{model}"
+default_permission_mode = "manual"
+telemetry = false
+[providers.ollama]
+type = "openai"
+base_url = "http://ollama:11434/v1"
+api_key = "ollama"
+[models."ollama/{model}"]
+provider = "ollama"
+model = "{model}"
+max_context_size = 16384
+capabilities = ["thinking", "tool_use"]
+''')
+PY
+  QWEN_MODEL="$(read_env QWEN_MODEL)"; VLM_MODEL="$(read_env VLM_MODEL)"; PROJECT="$(read_env PROJECT)"
+  printf '%s\n' "$MODE" >"$RUNTIME_DIR/mode"
+  printf '%s\n' "$GPU_STYLE" >"$RUNTIME_DIR/gpu-style"
+  CONFIG="$RUNTIME_DIR/compose.yaml"
+  cat >"$RUNTIME_DIR/kimi-entry.sh" <<'SH'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 version=2.5.2
 if [[ "${1:-}" == install ]]; then
   current="$(node -p 'require("/opt/kimi/node_modules/@moonshot-ai/kimi-code/package.json").version' 2>/dev/null || :)"
-  if [[ "$current" != "$version" ]]; then
-    npm install --prefix /opt/kimi --no-audit --no-fund "@moonshot-ai/kimi-code@$version"
-  fi
+  if [[ "$current" != "$version" ]]; then npm install --prefix /opt/kimi --no-audit --no-fund "@moonshot-ai/kimi-code@$version"; fi
   cp /lugbaka/kimi.toml /root/.kimi-code/config.toml
   exec /opt/kimi/node_modules/.bin/kimi --version
 fi
@@ -603,36 +657,22 @@ fi
 cp /lugbaka/kimi.toml /root/.kimi-code/config.toml
 exec /opt/kimi/node_modules/.bin/kimi "$@"
 SH
-  cat >"$ROOT/.runtime/lugbaka/kimi.toml" <<TOML
-default_model = "ollama/$QWEN_MODEL"
-default_permission_mode = "manual"
-telemetry = false
-[providers.ollama]
-type = "openai"
-base_url = "http://ollama:11434/v1"
-api_key = "ollama"
-[models."ollama/$QWEN_MODEL"]
-provider = "ollama"
-model = "$QWEN_MODEL"
-max_context_size = 16384
-capabilities = ["thinking", "tool_use"]
-TOML
 }
 
-# Include GPU configuration consistently for up, pull, exec and down.
-dc() {
-  local files=()
-  case "$GPU_STYLE" in nvidia) files=(-f "$ROOT/compose.gpu.yaml") ;; cdi) files=(-f "$ROOT/.runtime/lugbaka/gpu-cdi.yaml") ;; esac
-  compose "${files[@]}" "$@"
+dc() { compose "$@"; }
+
+control_command() {
+  printf 'bash %q %q --directory %q --project %q --docker-context %q' "$SELF" "$1" "$ROOT" "$PROJECT" "$DOCKER_CONTEXT"
+  if [[ -n "$QA_ID" ]]; then printf ' --qa-id %q' "$QA_ID"; fi
 }
 
 wait_http() {
-  local url="$1" attempts="${LUGBAKA_READY_ATTEMPTS:-120}" i
+  local url="$1" attempts=120 i
   for ((i=0; i<attempts; i++)); do
     if curl -fsS --connect-timeout 2 --max-time 5 "$url" >/dev/null 2>&1; then return; fi
     sleep 3
   done
-  die "Сервис не ответил: $url. Посмотрите: bash $SELF logs --project $PROJECT"
+  die "Сервис не ответил: $url. Посмотрите: $(control_command logs)"
 }
 pull_models() {
   local model
@@ -655,27 +695,47 @@ result() {
   printf '  Режим: %s | Docker context: %s | Проект: %s\n' "$MODE" "$DOCKER_CONTEXT" "$PROJECT"
   if ((SKIP_MODELS)); then printf '  Веса моделей пропущены (--skip-models).\n'; else printf '  Модели: %s + %s\n' "$QWEN_MODEL" "$VLM_MODEL"; fi
   printf '  Создайте первую учётную запись в браузере.\n'
-  printf '  Остановка с сохранением данных: bash %q down --project %q\n' "$SELF" "$PROJECT"
+  printf '  Остановка с сохранением данных: %s\n' "$(control_command down)"
   printf '============================================================\n'
 }
 
 if [[ "$ACTION" == install || "$ACTION" == prepare ]]; then
-  if [[ "${LUGBAKA_NO_SYSTEM_CHANGES:-0}" == 1 ]]; then ubuntu; else install_dependencies; fi
+  if [[ "$NO_SYSTEM_CHANGES" == 1 ]]; then ubuntu; else install_dependencies; fi
 fi
 [[ "$ACTION" != prepare ]] || exit 0
 docker_access
 if [[ "$ACTION" == gpu-check ]]; then
   setup_gpu
   if [[ "$GPU_STYLE" == cdi ]]; then GPU_FLAGS=(--device nvidia.com/gpu=all); else GPU_FLAGS=(--gpus all); fi
-  "${DOCKER[@]}" run --rm "${GPU_FLAGS[@]}" --entrypoint nvidia-smi "${OLLAMA_IMAGE:-ollama/ollama:0.32.15}" --query-gpu=name,driver_version --format=csv,noheader
+  "${DOCKER[@]}" run --rm "${GPU_FLAGS[@]}" --entrypoint nvidia-smi ollama/ollama:0.32.15 --query-gpu=name,driver_version --format=csv,noheader
   exit 0
 fi
 if [[ ! -f "$ROOT/compose.yaml" ]]; then
-  [[ "$ACTION" == install ]] || die 'Репозиторий не найден. Сначала выполните install.'
-  [[ "$ROOT" != "$(dirname -- "$SELF")" ]] || ROOT="$PWD/BRODYAGA"
-  [[ ! -e "$ROOT" ]] || die "Папка $ROOT уже существует; укажите отдельную --directory."
-  git clone -- https://github.com/media314/BRODYAGA.git "$ROOT"
-  git -C "$ROOT" checkout --detach "$UPSTREAM_SHA"
+  [[ "$ROOT" != "$SCRIPT_DIR" ]] || ROOT="$SCRIPT_DIR/BRODYAGA"
+  if [[ ! -e "$ROOT" ]]; then
+    [[ "$ACTION" == install ]] || die 'Установка ещё не выполнена. Сначала запустите install.'
+    git clone -- https://github.com/media314/BRODYAGA.git "$ROOT"
+    git -C "$ROOT" checkout --detach "$UPSTREAM_SHA"
+  fi
+  [[ -f "$ROOT/compose.yaml" && -f "$ROOT/.env.example" ]] || die "В $ROOT нет файлов БРОДЯГИ. Укажите --directory с репозиторием."
+  if [[ -d "$ROOT/.git" ]]; then
+    repository_origin="$(git -C "$ROOT" remote get-url origin)"
+    case "${repository_origin,,}" in
+      https://github.com/media314/brodyaga|https://github.com/media314/brodyaga.git|git@github.com:media314/brodyaga.git) ;;
+      *) die 'Папка BRODYAGA принадлежит другому репозиторию; её содержимое сохранено.' ;;
+    esac
+  fi
+  if ! cmp -s -- "$SELF" "$ROOT/lugbaka.sh"; then
+    mkdir -p "$ROOT/.runtime/lugbaka"
+    if [[ -f "$ROOT/lugbaka.sh" ]]; then
+      previous_installer="$(mktemp "$ROOT/.runtime/lugbaka/installer-previous.XXXXXX")"
+      cp -- "$ROOT/lugbaka.sh" "$previous_installer"
+    fi
+    next_installer="$(mktemp "$ROOT/.runtime/lugbaka/installer-next.XXXXXX")"
+    cp -- "$SELF" "$next_installer"
+    chmod 0755 "$next_installer"
+    mv -- "$next_installer" "$ROOT/lugbaka.sh"
+  fi
 fi
 ROOT="$(cd -- "$ROOT" && pwd)"
 configure
