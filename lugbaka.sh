@@ -21,6 +21,8 @@ DOCKER_CONTEXT="${DOCKER_CONTEXT:-default}"
 DOCKER=(docker --context "$DOCKER_CONTEXT")
 AS_ROOT=()
 CONFIG=""
+APT_WORK=""
+APT_OPTIONS=()
 
 say() { printf '\n==> %s\n' "$*"; }
 die() { printf '\nОШИБКА: %s\n' "$*" >&2; exit 1; }
@@ -30,6 +32,14 @@ on_error() {
   exit "$rc"
 }
 trap 'on_error "$?" "$LINENO"' ERR
+cleanup() {
+  local rc=$?
+  if [[ -n "$APT_WORK" ]]; then
+    "${AS_ROOT[@]}" rm -rf -- "$APT_WORK" || printf 'Не удалось удалить временные индексы APT: %s\n' "$APT_WORK" >&2
+  fi
+  exit "$rc"
+}
+trap cleanup EXIT
 
 banner() {
   [[ ! -t 1 || -n "${NO_COLOR:-}" ]] || printf '\033[1;36m'
@@ -263,8 +273,43 @@ root_access() {
     AS_ROOT=(sudo -n)
   fi
 }
-apt_install() { root_access; "${AS_ROOT[@]}" env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$@"; }
-apt_update() { root_access; "${AS_ROOT[@]}" apt-get update; }
+apt_sources() {
+  local suite arch mirror security source
+  root_access
+  ubuntu
+  suite="${UBUNTU_CODENAME:-$VERSION_CODENAME}"
+  arch="$(dpkg --print-architecture)"
+  if [[ -z "$APT_WORK" ]]; then
+    APT_WORK="$("${AS_ROOT[@]}" mktemp -d /var/tmp/lugbaka-apt.XXXXXXXX)"
+    "${AS_ROOT[@]}" chmod 0755 "$APT_WORK"
+    "${AS_ROOT[@]}" install -d -m 0755 "$APT_WORK/sources" "$APT_WORK/lists"
+    APT_OPTIONS=(-o Dir::Etc::sourcelist=/dev/null -o "Dir::Etc::sourceparts=$APT_WORK/sources"
+      -o "Dir::State::lists=$APT_WORK/lists" -o Dir::Cache::pkgcache= -o Dir::Cache::srcpkgcache=
+      -o APT::Update::Error-Mode=any -o APT::Get::AllowUnauthenticated=false
+      -o Acquire::AllowInsecureRepositories=false -o Acquire::AllowDowngradeToInsecureRepositories=false)
+    say 'APT: отдельные подписанные источники Ubuntu/Docker/NVIDIA; системные источники сохранены'
+  fi
+  [[ -r /usr/share/keyrings/ubuntu-archive-keyring.gpg ]] || die 'Отсутствует штатный ключ ubuntu-archive-keyring.'
+  case "$arch" in
+    amd64|i386) mirror=http://archive.ubuntu.com/ubuntu; security=http://security.ubuntu.com/ubuntu ;;
+    *) mirror=http://ports.ubuntu.com/ubuntu-ports; security="$mirror" ;;
+  esac
+  printf 'Types: deb\nURIs: %s\nSuites: %s %s-updates\nComponents: main restricted universe multiverse\nArchitectures: %s\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n\nTypes: deb\nURIs: %s\nSuites: %s-security\nComponents: main restricted universe multiverse\nArchitectures: %s\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n' \
+    "$mirror" "$suite" "$suite" "$arch" "$security" "$suite" "$arch" |
+    "${AS_ROOT[@]}" tee "$APT_WORK/sources/ubuntu.sources" >/dev/null
+  # Only add sources created and validated by this invocation, never host PPAs.
+  for source in "${INSTALLER_APT_SOURCES[@]}"; do
+    "${AS_ROOT[@]}" cp -- "$source" "$APT_WORK/sources/"
+  done
+  "${AS_ROOT[@]}" chmod 0644 "$APT_WORK/sources/"*
+}
+INSTALLER_APT_SOURCES=()
+apt_install() {
+  [[ -n "$APT_WORK" ]] || apt_update
+  root_access
+  "${AS_ROOT[@]}" env DEBIAN_FRONTEND=noninteractive apt-get "${APT_OPTIONS[@]}" install -y --no-install-recommends "$@"
+}
+apt_update() { apt_sources; "${AS_ROOT[@]}" apt-get "${APT_OPTIONS[@]}" update; }
 https() { curl --proto '=https' --tlsv1.2 --retry 3 --connect-timeout 15 -fsSL "$@"; }
 
 ubuntu() {
@@ -277,8 +322,27 @@ ubuntu() {
   say "$PRETTY_NAME / $(dpkg --print-architecture)"
 }
 
+docker_repository() {
+  local suite arch source_text
+  suite="${UBUNTU_CODENAME:-$VERSION_CODENAME}"
+  arch="$(dpkg --print-architecture)"
+  https "https://download.docker.com/linux/ubuntu/dists/$suite/Release" -o /dev/null
+  root_access
+  "${AS_ROOT[@]}" install -d -m 0755 /etc/apt/keyrings
+  https https://download.docker.com/linux/ubuntu/gpg | "${AS_ROOT[@]}" tee /etc/apt/keyrings/lugbaka-docker.asc >/dev/null
+  "${AS_ROOT[@]}" chmod 0644 /etc/apt/keyrings/lugbaka-docker.asc
+  source_text="$(printf 'Types: deb\nURIs: https://download.docker.com/linux/ubuntu\nSuites: %s\nComponents: stable\nArchitectures: %s\nSigned-By: /etc/apt/keyrings/lugbaka-docker.asc\n' "$suite" "$arch")"
+  if [[ -e /etc/apt/sources.list.d/lugbaka-docker.sources ]]; then
+    [[ "$(cat /etc/apt/sources.list.d/lugbaka-docker.sources)" == "$source_text" ]] || die 'Существующий lugbaka-docker.sources отличается; автоматически не заменяю.'
+  else
+    printf '%s\n' "$source_text" | "${AS_ROOT[@]}" tee /etc/apt/sources.list.d/lugbaka-docker.sources >/dev/null
+  fi
+  INSTALLER_APT_SOURCES+=(/etc/apt/sources.list.d/lugbaka-docker.sources)
+  apt_update
+}
+
 install_dependencies() {
-  local package suite arch conflict
+  local package conflict
   ubuntu
   local missing=()
   for package in curl git iproute2 ca-certificates gnupg; do
@@ -293,25 +357,16 @@ install_dependencies() {
         die "Установлен $conflict. Автоматическая замена существующего runtime запрещена."
       fi
     done
-    suite="${UBUNTU_CODENAME:-$VERSION_CODENAME}"
-    arch="$(dpkg --print-architecture)"
-    https "https://download.docker.com/linux/ubuntu/dists/$suite/Release" -o /dev/null
-    root_access
-    "${AS_ROOT[@]}" install -d -m 0755 /etc/apt/keyrings
-    https https://download.docker.com/linux/ubuntu/gpg | "${AS_ROOT[@]}" tee /etc/apt/keyrings/lugbaka-docker.asc >/dev/null
-    "${AS_ROOT[@]}" chmod 0644 /etc/apt/keyrings/lugbaka-docker.asc
-    local source_text
-    source_text="$(printf 'Types: deb\nURIs: https://download.docker.com/linux/ubuntu\nSuites: %s\nComponents: stable\nArchitectures: %s\nSigned-By: /etc/apt/keyrings/lugbaka-docker.asc\n' "$suite" "$arch")"
-    if [[ -e /etc/apt/sources.list.d/lugbaka-docker.sources ]]; then
-      [[ "$(cat /etc/apt/sources.list.d/lugbaka-docker.sources)" == "$source_text" ]] || die 'Существующий lugbaka-docker.sources отличается; автоматически не заменяю.'
-    else
-      printf '%s\n' "$source_text" | "${AS_ROOT[@]}" tee /etc/apt/sources.list.d/lugbaka-docker.sources >/dev/null
-    fi
-    apt_update
+    docker_repository
     apt_install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
     if [[ -d /run/systemd/system ]]; then "${AS_ROOT[@]}" systemctl enable --now docker; fi
   elif ! docker --context "$DOCKER_CONTEXT" compose version >/dev/null 2>&1; then
-    apt_install docker-compose-plugin
+    if dpkg-query -W -f='${Status}' docker.io 2>/dev/null | grep -q '^install ok installed$'; then
+      apt_install docker-compose-v2
+    else
+      docker_repository
+      apt_install docker-compose-plugin
+    fi
   fi
   say 'Системные зависимости установлены'
   docker --context "$DOCKER_CONTEXT" --version
@@ -372,6 +427,7 @@ setup_gpu() {
     https https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list |
       sed 's#deb https://#deb [signed-by=/usr/share/keyrings/lugbaka-nvidia.gpg] https://#g' |
       "${AS_ROOT[@]}" tee /etc/apt/sources.list.d/lugbaka-nvidia.list >/dev/null
+    INSTALLER_APT_SOURCES+=(/etc/apt/sources.list.d/lugbaka-nvidia.list)
     apt_update
     apt_install nvidia-container-toolkit
   fi
